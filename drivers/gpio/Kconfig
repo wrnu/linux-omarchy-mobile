@@ -1650,6 +1650,17 @@ config GPIO_RC5T583
 	  This driver provides the support for driving/reading the GPIO pins
 	  of RC5T583 device through standard GPIO library.
 
+config GPIO_S2MPG11
+	tristate "Samsung S2MPG11 PMIC GPIO support"
+	depends on MFD_SEC_ACPM
+	help
+	  Support for the six GPIOs of the Samsung S2MPG11 sub-PMIC paired
+	  with Google's gs101 SoC, reached through the ACPM firmware. On the
+	  Pixel 6 boards they switch the camera PMIC and a camera supply.
+
+	  This driver can also be built as a module. If so, the module will
+	  be called gpio-s2mpg11.
+
 config GPIO_S2MPG13
 	tristate "Samsung S2MPG13 PMIC GPIO support"
 	depends on MFD_SEC_ACPM

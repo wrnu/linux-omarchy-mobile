@@ -25,6 +25,31 @@ properties:
   interrupts:
     maxItems: 1
 
+  gpio:
+    type: object
+    description:
+      The PMIC's six general purpose pins. On the Pixel 6 boards they
+      switch the camera PMIC and the telephoto camera's supply.
+
+    properties:
+      compatible:
+        const: samsung,s2mpg11-gpio
+
+      gpio-controller: true
+
+      '#gpio-cells':
+        const: 2
+
+      gpio-line-names:
+        maxItems: 6
+
+    required:
+      - compatible
+      - gpio-controller
+      - '#gpio-cells'
+
+    additionalProperties: false
+
   regulators:
     type: object
     $ref: /schemas/regulator/samsung,s2mpg11-regulator.yaml
@@ -76,6 +101,12 @@ examples:
 
         vinl1s-supply = <&buck8m>;
         vinl2s-supply = <&buck6s>;
+
+        gpio {
+            compatible = "samsung,s2mpg11-gpio";
+            gpio-controller;
+            #gpio-cells = <2>;
+        };
 
         regulators {
             buckd {

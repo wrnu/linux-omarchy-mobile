@@ -410,6 +410,25 @@
 	};
 };
 
+/*
+ * The ultrawide camera's bus (Google's I2C bus 3): the IMX386 at 0x1a and
+ * its module EEPROM at 0x50, both powered from the camera PMIC, so the bus
+ * stays disabled until the camera supplies are described. Stock pulls the
+ * lines up in the SoC while the bus is in use and runs it at 950 kHz;
+ * fast mode is plenty for bring-up.
+ */
+&hsi2c3_bus {
+	samsung,pin-pud = <GS101_PIN_PULL_UP>;
+};
+
+&usi3 {
+	samsung,mode = <USI_MODE_I2C>;
+};
+
+&hsi2c_3 {
+	clock-frequency = <400000>;
+};
+
 / {
 	/* the amplifiers' VP comes straight from the battery (V_SYS) */
 	amp_vp: regulator-amp-vp {

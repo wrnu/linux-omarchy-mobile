@@ -381,6 +381,8 @@
 		regulators {
 			cam_ldo1: ldo1 {
 				regulator-name = "cam_ldo1";
+				/* stock waits 3 ms before the next camera supply */
+				regulator-enable-ramp-delay = <3000>;
 			};
 
 			cam_ldo2: ldo2 {
@@ -427,6 +429,51 @@
 
 &hsi2c_3 {
 	clock-frequency = <400000>;
+
+	/*
+	 * The ultrawide, a Sony IMX386. Stock's power-up: LDO1, 3 ms (the
+	 * ramp delay above), LDO4, 1 ms, MCLK, 1 ms, reset released, 10 ms.
+	 * The board feeds the module only LDO1 (3.05 V) and LDO4 (2.9 V), so
+	 * the module makes its interface and core supplies from LDO1. The
+	 * MCLK runs from the 24.576 MHz oscillator, which is what stock's
+	 * sensor settings declare (EXCK_FREQ 0x1893). Not connected to a
+	 * receiver yet: the endpoint has no remote.
+	 */
+	camera-sensor@1a {
+		compatible = "sony,imx386";
+		reg = <0x1a>;
+		clocks = <&cmu_top CLK_DOUT_CMU_CIS_CLK0>;
+		assigned-clocks = <&cmu_top CLK_DOUT_CMU_CIS_CLK0>;
+		assigned-clock-rates = <24576000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&cam_uw_mclk_on>;
+		reset-gpios = <&gpp6 3 GPIO_ACTIVE_LOW>;
+		vif-supply = <&cam_ldo1>;
+		vdig-supply = <&cam_ldo1>;
+		vana-supply = <&cam_ldo4>;
+		firmware-name = "omamobile/camera/imx386-uw.bin";
+		orientation = <1>;	/* back */
+		/* as cheetah's ultrawide: upright in portrait at 270 */
+		rotation = <270>;
+		status = "disabled";
+
+		port {
+			/* the rate is stock's; four lanes as on cheetah [I] */
+			endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <774144000>;
+			};
+		};
+	};
+};
+
+&pinctrl_peric0 {
+	cam_uw_mclk_on: cam-uw-mclk-on-pins {
+		samsung,pins = "gpp3-0";
+		samsung,pin-function = <GS101_PIN_FUNC_2>;
+		samsung,pin-pud = <GS101_PIN_PULL_NONE>;
+		samsung,pin-drv = <GS101_PIN_DRV_5_MA>;
+	};
 };
 
 / {

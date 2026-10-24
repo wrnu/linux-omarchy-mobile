@@ -451,6 +451,17 @@
 		vinl6s-supply = <&s2mpg11_buckboost>;
 		vinbd-supply = <&s2mpg11_buckboost>;
 
+		/*
+		 * On raven, GPIOs 0, 1, 3 and 4 drive the camera PMIC and
+		 * GPIO 2 enables the telephoto camera's supply.
+		 */
+		s2mpg11_gpio: gpio {
+			compatible = "samsung,s2mpg11-gpio";
+			gpio-controller;
+			#gpio-cells = <2>;
+			status = "disabled";
+		};
+
 		regulators {
 			buck1s {
 				/* multimedia */

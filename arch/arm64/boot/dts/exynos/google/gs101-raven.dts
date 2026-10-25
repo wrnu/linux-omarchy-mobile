@@ -47,6 +47,19 @@
 			/* Not in 3.75-4 GiB: DPP0's reads from 0xf2c00000+ hung silently */
 			alloc-ranges = <0x0 0xa0000000 0x40000000>;
 		};
+
+		/*
+		 * Capture buffers for the CSIS WDMA, which takes 32-bit
+		 * addresses (the camera SysMMUs are bypassed), as on cheetah;
+		 * reusable while no camera streams.
+		 */
+		camera_pool: camera-pool {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x8000000>;
+			alignment = <0x0 0x200000>;
+			alloc-ranges = <0x0 0x80000000 0x80000000>;
+		};
 	};
 };
 
@@ -436,8 +449,7 @@
 	 * The board feeds the module only LDO1 (3.05 V) and LDO4 (2.9 V), so
 	 * the module makes its interface and core supplies from LDO1. The
 	 * MCLK runs from the 24.576 MHz oscillator, which is what stock's
-	 * sensor settings declare (EXCK_FREQ 0x1893). Not connected to a
-	 * receiver yet: the endpoint has no remote.
+	 * sensor settings declare (EXCK_FREQ 0x1893).
 	 */
 	camera-sensor@1a {
 		compatible = "sony,imx386";
@@ -452,19 +464,40 @@
 		vdig-supply = <&cam_ldo1>;
 		vana-supply = <&cam_ldo4>;
 		firmware-name = "omamobile/camera/imx386-uw.bin";
+		/* the CSIS WDMA drops lines above this, as on cheetah */
+		sony,max-line-throughput = <330>;
 		orientation = <1>;	/* back */
 		/* as cheetah's ultrawide: upright in portrait at 270 */
 		rotation = <270>;
 		status = "disabled";
 
 		port {
-			/* the rate is stock's; four lanes as on cheetah [I] */
-			endpoint {
+			/*
+			 * The rate is stock's. Link 1 with four lanes: links 0, 2,
+			 * 4 and 6 saw nothing while it streamed, unlike cheetah,
+			 * whose ultrawide is on link 2.
+			 */
+			uw_out: endpoint {
+				remote-endpoint = <&csis1_in>;
 				data-lanes = <1 2 3 4>;
 				link-frequencies = /bits/ 64 <774144000>;
 			};
 		};
 	};
+};
+
+&csis1 {
+	memory-region = <&camera_pool>;
+};
+
+&csis1_in {
+	remote-endpoint = <&uw_out>;
+	data-lanes = <1 2 3 4>;
+};
+
+&csis_dcphy {
+	/* receive settings, generated from the phone's own camera software */
+	firmware-name = "omamobile/camera/gs201-dcphy.bin";
 };
 
 &pinctrl_peric0 {

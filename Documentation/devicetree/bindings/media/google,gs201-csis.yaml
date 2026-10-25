@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/media/google,gs201-csis.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Google gs201 CSIS camera receiver link and CSIS WDMA
+title: Google gs101 and gs201 CSIS camera receiver link and CSIS WDMA
 
 maintainers:
   - Derek Ross <derekross@gmail.com>
@@ -16,7 +16,11 @@ description:
 
 properties:
   compatible:
-    const: google,gs201-csis
+    oneOf:
+      - const: google,gs201-csis
+      - items:
+          - const: google,gs101-csis
+          - const: google,gs201-csis
 
   reg:
     minItems: 3
@@ -47,14 +51,24 @@ properties:
       - const: wdma
 
   clocks:
-    items:
-      - description: the camera block's DVFS domain
-      - description: the bus (INT) DVFS domain
+    minItems: 1
+    maxItems: 4
+    description:
+      The camera block's (cam) and the bus's (int) DVFS domains, and the
+      link's (link) and the CSIS DMA's (dma) gates in the camera block's
+      clock controller, which loses its state with the block's power
+      domain (gs101). gs101 has no CAM DVFS domain, so its cam clock is the
+      CSIS bus divider in CMU_TOP.
 
   clock-names:
+    minItems: 1
+    maxItems: 4
     items:
-      - const: cam
-      - const: int
+      enum:
+        - cam
+        - int
+        - link
+        - dma
 
   phys:
     maxItems: 1

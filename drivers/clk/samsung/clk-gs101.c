@@ -2431,10 +2431,14 @@ static const struct samsung_cmu_info csis_cmu_info __initconst = {
 	.nr_clk_ids		= CLKS_NR_CSIS,
 	.clk_regs		= csis_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(csis_clk_regs),
+	.sysreg_clk_regs	= dcrg_memclk_sysreg,
+	.nr_sysreg_clk_regs	= ARRAY_SIZE(dcrg_memclk_sysreg),
 	.clk_name		= "bus",
 	.auto_clock_gate	= true,
 	.gate_dbg_offset	= GS101_GATE_DBG_OFFSET,
 	.option_offset		= CSIS_CMU_CSIS_CONTROLLER_OPTION,
+	.drcg_offset		= GS101_DRCG_EN_OFFSET,
+	.memclk_offset		= GS101_MEMCLK_OFFSET,
 };
 
 /* ---- CMU_DPU ------------------------------------------------------------- */

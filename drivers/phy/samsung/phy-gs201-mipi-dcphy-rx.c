@@ -72,6 +72,7 @@
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-mipi-dphy.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/seq_file.h>
 #include <linux/soc/samsung/exynos-pmu.h>
@@ -801,6 +802,15 @@ static int gs201_dcphy_probe(struct platform_device *pdev)
 
 	/* The settings file; without it, no link powers on (says so then). */
 	of_property_read_string(dev->of_node, "firmware-name", &dcphy->fw_name);
+
+	/*
+	 * The PHY core holds a link's PHY, and so this device and its power
+	 * domain (gs101: pd_csis), resumed while the link is initialised and
+	 * powered: the only times the registers are touched.
+	 */
+	ret = devm_pm_runtime_enable(dev);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < DCPHY_NUM_LINKS; i++) {
 		struct gs201_dcphy_link *link = &dcphy->links[i];

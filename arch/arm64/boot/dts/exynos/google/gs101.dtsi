@@ -2330,6 +2330,19 @@
 			status = "disabled";
 		};
 
+		cmu_csis: clock-controller@1a400000 {
+			compatible = "google,gs101-cmu-csis";
+			reg = <0x1a400000 0x10000>;
+			#clock-cells = <1>;
+
+			clocks = <&ext_24_5m>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "oscclk", "bus";
+			power-domains = <&pd_csis>;
+			/* its registers are unreachable until EL3 restores D_TZPC_CSIS */
+			status = "disabled";
+		};
+
 		cmu_dpu: clock-controller@1c000000 {
 			compatible = "google,gs101-cmu-dpu";
 			reg = <0x1c000000 0x10000>;

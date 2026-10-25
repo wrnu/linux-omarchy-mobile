@@ -2339,8 +2339,20 @@
 				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
 			clock-names = "oscclk", "bus";
 			power-domains = <&pd_csis>;
+			samsung,sysreg = <&sysreg_csis>;
 			/* its registers are unreachable until EL3 restores D_TZPC_CSIS */
 			status = "disabled";
+		};
+
+		/*
+		 * No clocks: a syscon keeps its clock prepared, which would keep
+		 * CMU_CSIS runtime-active and pd_csis on for good. Only CMU_CSIS
+		 * touches it, from its probe and runtime PM, with the block
+		 * clocked.
+		 */
+		sysreg_csis: syscon@1a420000 {
+			compatible = "google,gs101-csis-sysreg", "syscon";
+			reg = <0x1a420000 0x10000>;
 		};
 
 		cmu_dpu: clock-controller@1c000000 {

@@ -9,6 +9,7 @@
 #include <linux/clk-provider.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 
 #include <dt-bindings/clock/google,gs101.h>
 
@@ -5388,6 +5389,8 @@ static const struct of_device_id gs101_cmu_of_match[] = {
 static const struct dev_pm_ops gs101_cmu_pm_ops = {
 	SET_RUNTIME_PM_OPS(exynos_arm64_cmu_suspend, exynos_arm64_cmu_resume,
 			   NULL)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				     pm_runtime_force_resume)
 };
 
 static struct platform_driver gs101_cmu_driver __refdata = {

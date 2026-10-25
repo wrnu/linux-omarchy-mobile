@@ -2344,6 +2344,12 @@
 			status = "disabled";
 		};
 
+		dtzpc_csis: dtzpc@1a410000 {
+			compatible = "google,gs101-dtzpc";
+			reg = <0x1a410000 0x10000>;
+			clocks = <&cmu_csis CLK_GOUT_CSIS_D_TZPC_CSIS_PCLK>;
+		};
+
 		/*
 		 * No clocks: a syscon keeps its clock prepared, which would keep
 		 * CMU_CSIS runtime-active and pd_csis on for good. Only CMU_CSIS

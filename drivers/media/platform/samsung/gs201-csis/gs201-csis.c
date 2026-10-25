@@ -39,6 +39,7 @@
 #include <linux/phy/phy-mipi-dphy.h>
 #include <dt-bindings/phy/phy.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/mfd/syscon.h>
@@ -138,6 +139,14 @@ struct gs201_csis {
 	void __iomem *wdma;
 	void __iomem *ebuf_regs;	/* optional, shared */
 	struct phy *phy;
+	/*
+	 * gs101: the CMU_CSIS gates of the link and the CSIS DMA. Holding
+	 * them keeps the camera block's clock controller resumed, with its
+	 * registers restored, while the block is powered.
+	 */
+	struct clk_bulk_data clks[2];
+	int link_irq, wdma_irq;
+	bool powered;		/* runtime-resumed: registers reachable */
 	struct clk *cam_clk;		/* optional: ACPM CAM DVFS domain */
 	struct clk *int_clk;		/* optional: ACPM INT (bus) DVFS domain */
 	unsigned long cam_rate_old;
@@ -492,6 +501,51 @@ static void gs201_csis_release(struct gs201_csis *csis)
 	mutex_unlock(&gs201_csis_owner_lock);
 }
 
+/*
+ * The camera block's power domain (gs101: pd_csis, cycled by genpd) is
+ * on only while a link streams; its registers are reachable only then.
+ */
+static int gs201_csis_power_get(struct gs201_csis *csis)
+{
+	int ret;
+
+	ret = pm_runtime_resume_and_get(csis->dev);
+	if (ret)
+		return ret;
+	WRITE_ONCE(csis->powered, true);
+
+	return 0;
+}
+
+static void gs201_csis_power_put(struct gs201_csis *csis)
+{
+	WRITE_ONCE(csis->powered, false);
+	synchronize_irq(csis->link_irq);
+	synchronize_irq(csis->wdma_irq);
+	pm_runtime_put(csis->dev);
+}
+
+static int gs201_csis_runtime_suspend(struct device *dev)
+{
+	struct gs201_csis *csis = dev_get_drvdata(dev);
+
+	clk_bulk_disable_unprepare(ARRAY_SIZE(csis->clks), csis->clks);
+
+	return 0;
+}
+
+static int gs201_csis_runtime_resume(struct device *dev)
+{
+	struct gs201_csis *csis = dev_get_drvdata(dev);
+
+	return clk_bulk_prepare_enable(ARRAY_SIZE(csis->clks), csis->clks);
+}
+
+static const struct dev_pm_ops gs201_csis_pm_ops = {
+	RUNTIME_PM_OPS(gs201_csis_runtime_suspend, gs201_csis_runtime_resume,
+		       NULL)
+};
+
 static const struct gs201_csis_format *gs201_csis_find_code(u32 code)
 {
 	unsigned int i;
@@ -796,6 +850,10 @@ static irqreturn_t gs201_csis_link_irq(int irq, void *data)
 	unsigned int bit;
 	u32 src0, src1;
 
+	/* A line left asserted as the block powers off: not ours to read */
+	if (!READ_ONCE(csis->powered))
+		return IRQ_NONE;
+
 	src0 = link_read(csis, CSIS_INT_SRC0);
 	src1 = link_read(csis, CSIS_INT_SRC1);
 	/*
@@ -878,7 +936,7 @@ static irqreturn_t gs201_csis_wdma_irq(int irq, void *data)
 	u32 src;
 
 	/* The line and the context are shared: only the streaming link reads */
-	if (READ_ONCE(gs201_csis_owner) != csis)
+	if (READ_ONCE(gs201_csis_owner) != csis || !READ_ONCE(csis->powered))
 		return IRQ_NONE;
 
 	src = wdma_read(csis, CSIS_WDMA_INT_SRC);
@@ -1581,9 +1639,13 @@ static int gs201_csis_start_streaming(struct vb2_queue *vq, unsigned int count)
 	if (ret)
 		goto err_return;
 
-	ret = video_device_pipeline_alloc_start(&csis->vdev);
+	ret = gs201_csis_power_get(csis);
 	if (ret)
 		goto err_release;
+
+	ret = video_device_pipeline_alloc_start(&csis->vdev);
+	if (ret)
+		goto err_power;
 
 	csis->sequence = 0;
 	memset(&csis->stats, 0, sizeof(csis->stats));
@@ -1619,6 +1681,8 @@ err_wdma:
 	}
 err_pipeline:
 	video_device_pipeline_stop(&csis->vdev);
+err_power:
+	gs201_csis_power_put(csis);
 err_release:
 	gs201_csis_release(csis);
 err_return:
@@ -1686,6 +1750,7 @@ static void gs201_csis_stop_streaming(struct vb2_queue *vq)
 	gs201_csis_print_bits(NULL, csis->dev, "WDMA FS by channel", csis->stats.wdma_fs, 4);
 	gs201_csis_print_bits(NULL, csis->dev, "WDMA FE by channel", csis->stats.wdma_fe, 4);
 	gs201_csis_print_bits(NULL, csis->dev, "WDMA line ends by channel", csis->stats.wdma_le, 4);
+	gs201_csis_power_put(csis);
 }
 
 static const struct vb2_ops gs201_csis_vb2_ops = {
@@ -1749,7 +1814,7 @@ static int gs201_csis_regs_show(struct seq_file *s, void *unused)
 	unsigned int i;
 
 	mutex_lock(&csis->vlock);
-	if (!vb2_is_streaming(&csis->queue)) {
+	if (!vb2_is_streaming(&csis->queue) || !READ_ONCE(csis->powered)) {
 		mutex_unlock(&csis->vlock);
 		seq_puts(s, "not streaming\n");
 		return 0;
@@ -1795,7 +1860,7 @@ static int gs201_csis_scan_show(struct seq_file *s, void *unused)
 	u32 off, val;
 
 	mutex_lock(&csis->vlock);
-	if (!vb2_is_streaming(&csis->queue)) {
+	if (!vb2_is_streaming(&csis->queue) || !READ_ONCE(csis->powered)) {
 		mutex_unlock(&csis->vlock);
 		seq_puts(s, "not streaming\n");
 		return 0;
@@ -2094,6 +2159,11 @@ static int gs201_csis_probe(struct platform_device *pdev)
 	csis->int_clk = devm_clk_get_optional(dev, "int");
 	if (IS_ERR(csis->int_clk))
 		return dev_err_probe(dev, PTR_ERR(csis->int_clk), "INT clock\n");
+	csis->clks[0].id = "link";
+	csis->clks[1].id = "dma";
+	ret = devm_clk_bulk_get_optional(dev, ARRAY_SIZE(csis->clks), csis->clks);
+	if (ret)
+		return dev_err_probe(dev, ret, "link and DMA clocks\n");
 
 	ret = device_property_read_u32(dev, "google,csis-link", &csis->link_id);
 	if (ret || csis->link_id > 7)
@@ -2127,11 +2197,16 @@ static int gs201_csis_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_mem;
 
+	ret = devm_pm_runtime_enable(dev);
+	if (ret)
+		goto err_mem;
+
 	irq = platform_get_irq_byname(pdev, "link");
 	if (irq < 0) {
 		ret = irq;
 		goto err_mem;
 	}
+	csis->link_irq = irq;
 	ret = devm_request_irq(dev, irq, gs201_csis_link_irq, 0,
 			       dev_name(dev), csis);
 	if (ret)
@@ -2142,6 +2217,7 @@ static int gs201_csis_probe(struct platform_device *pdev)
 		ret = irq;
 		goto err_mem;
 	}
+	csis->wdma_irq = irq;
 	ret = devm_request_irq(dev, irq, gs201_csis_wdma_irq, IRQF_SHARED,
 			       dev_name(dev), csis);
 	if (ret)
@@ -2206,6 +2282,7 @@ static struct platform_driver gs201_csis_driver = {
 	.driver = {
 		.name = CSIS_DRIVER_NAME,
 		.of_match_table = gs201_csis_of_match,
+		.pm = pm_ptr(&gs201_csis_pm_ops),
 	},
 };
 module_platform_driver(gs201_csis_driver);

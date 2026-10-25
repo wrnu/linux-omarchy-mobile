@@ -13,9 +13,6 @@ description: |+
   Exynos processors include support for multiple power domains which are used
   to gate power to one or more peripherals on the processor.
 
-allOf:
-  - $ref: power-domain.yaml#
-
 properties:
   compatible:
     enum:
@@ -45,10 +42,27 @@ properties:
   power-domains:
     maxItems: 1
 
+  samsung,dtzpc:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Distributed TrustZone Protection Control (DTZPC) node.
+
 required:
   - compatible
   - "#power-domain-cells"
   - reg
+
+allOf:
+  - $ref: power-domain.yaml#
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              const: google,gs101-pd
+    then:
+      properties:
+        samsung,dtzpc: false
 
 unevaluatedProperties: false
 
@@ -66,4 +80,12 @@ examples:
         reg = <0x10044060 0x20>;
         #power-domain-cells = <0>;
         label = "MFC";
+    };
+
+    power-domain@17462400 {
+        compatible = "google,gs101-pd";
+        reg = <0x17462400 0x20>;
+        #power-domain-cells = <0>;
+        label = "csis";
+        samsung,dtzpc = <&dtzpc_csis>;
     };

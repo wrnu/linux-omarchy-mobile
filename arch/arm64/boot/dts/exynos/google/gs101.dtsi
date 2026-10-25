@@ -2361,6 +2361,150 @@
 			reg = <0x1a420000 0x10000>;
 		};
 
+		/*
+		 * CSIS links: the same receiver, WDMA and DC-PHY as gs201's at
+		 * the same addresses, with gs101's interrupts (Google's GPL
+		 * gs101-isp.dtsi). Every link feeds CSIS WDMA context 0 with
+		 * the EBUF bypassed, so they stream one at a time. Links 0 and
+		 * 1 take four D-PHY lanes, links 2, 4 and 6 four with the next
+		 * link's two.
+		 */
+		csis0: csis@1a440000 {
+			compatible = "google,gs101-csis", "google,gs201-csis";
+			reg = <0x1a440000 0x1000>, <0x1a4d0000 0x1000>,
+			      <0x1a4d7000 0x1000>, <0x1a4c0000 0x100>;
+			reg-names = "link", "dma", "wdma", "ebuf";
+			interrupts = <GIC_SPI 294 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "link", "wdma";
+			clocks = <&cmu_csis CLK_GOUT_CSIS_MIPI_PHY_LINK_WRAP_ACLK_CSIS0>,
+				 <&cmu_csis CLK_GOUT_CSIS_CSISX8_ACLK_CSIS_DMA>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "link", "dma", "cam";
+			phys = <&csis_dcphy 0>;
+			power-domains = <&pd_csis>;
+			google,csis-link = <0>;
+			google,wdma-context = <0>;
+			google,csis-sysreg = <&sysreg_csis>;
+			status = "disabled";
+
+			port {
+				csis0_in: endpoint {
+				};
+			};
+		};
+
+		csis1: csis@1a450000 {
+			compatible = "google,gs101-csis", "google,gs201-csis";
+			reg = <0x1a450000 0x1000>, <0x1a4d0000 0x1000>,
+			      <0x1a4d7000 0x1000>, <0x1a4c0000 0x100>;
+			reg-names = "link", "dma", "wdma", "ebuf";
+			interrupts = <GIC_SPI 295 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "link", "wdma";
+			clocks = <&cmu_csis CLK_GOUT_CSIS_MIPI_PHY_LINK_WRAP_ACLK_CSIS1>,
+				 <&cmu_csis CLK_GOUT_CSIS_CSISX8_ACLK_CSIS_DMA>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "link", "dma", "cam";
+			phys = <&csis_dcphy 1>;
+			power-domains = <&pd_csis>;
+			google,csis-link = <1>;
+			google,wdma-context = <0>;
+			google,csis-sysreg = <&sysreg_csis>;
+			status = "disabled";
+
+			port {
+				csis1_in: endpoint {
+				};
+			};
+		};
+
+		csis2: csis@1a460000 {
+			compatible = "google,gs101-csis", "google,gs201-csis";
+			reg = <0x1a460000 0x1000>, <0x1a4d0000 0x1000>,
+			      <0x1a4d7000 0x1000>, <0x1a4c0000 0x100>;
+			reg-names = "link", "dma", "wdma", "ebuf";
+			interrupts = <GIC_SPI 296 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "link", "wdma";
+			clocks = <&cmu_csis CLK_GOUT_CSIS_MIPI_PHY_LINK_WRAP_ACLK_CSIS2>,
+				 <&cmu_csis CLK_GOUT_CSIS_CSISX8_ACLK_CSIS_DMA>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "link", "dma", "cam";
+			phys = <&csis_dcphy 2>;
+			power-domains = <&pd_csis>;
+			google,csis-link = <2>;
+			google,wdma-context = <0>;
+			google,csis-sysreg = <&sysreg_csis>;
+			status = "disabled";
+
+			port {
+				csis2_in: endpoint {
+				};
+			};
+		};
+
+		csis4: csis@1a480000 {
+			compatible = "google,gs101-csis", "google,gs201-csis";
+			reg = <0x1a480000 0x1000>, <0x1a4d0000 0x1000>,
+			      <0x1a4d7000 0x1000>, <0x1a4c0000 0x100>;
+			reg-names = "link", "dma", "wdma", "ebuf";
+			interrupts = <GIC_SPI 298 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "link", "wdma";
+			clocks = <&cmu_csis CLK_GOUT_CSIS_MIPI_PHY_LINK_WRAP_ACLK_CSIS4>,
+				 <&cmu_csis CLK_GOUT_CSIS_CSISX8_ACLK_CSIS_DMA>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "link", "dma", "cam";
+			phys = <&csis_dcphy 4>;
+			power-domains = <&pd_csis>;
+			google,csis-link = <4>;
+			google,wdma-context = <0>;
+			google,csis-sysreg = <&sysreg_csis>;
+			status = "disabled";
+
+			port {
+				csis4_in: endpoint {
+				};
+			};
+		};
+
+		csis6: csis@1a4a0000 {
+			compatible = "google,gs101-csis", "google,gs201-csis";
+			reg = <0x1a4a0000 0x1000>, <0x1a4d0000 0x1000>,
+			      <0x1a4d7000 0x1000>, <0x1a4c0000 0x100>;
+			reg-names = "link", "dma", "wdma", "ebuf";
+			interrupts = <GIC_SPI 300 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 302 IRQ_TYPE_LEVEL_HIGH 0>;
+			interrupt-names = "link", "wdma";
+			clocks = <&cmu_csis CLK_GOUT_CSIS_MIPI_PHY_LINK_WRAP_ACLK_CSIS6>,
+				 <&cmu_csis CLK_GOUT_CSIS_CSISX8_ACLK_CSIS_DMA>,
+				 <&cmu_top CLK_DOUT_CMU_CSIS_BUS>;
+			clock-names = "link", "dma", "cam";
+			phys = <&csis_dcphy 6>;
+			power-domains = <&pd_csis>;
+			google,csis-link = <6>;
+			google,wdma-context = <0>;
+			google,csis-sysreg = <&sysreg_csis>;
+			status = "disabled";
+
+			port {
+				csis6_in: endpoint {
+				};
+			};
+		};
+
+		csis_dcphy: phy@1a4f0000 {
+			compatible = "google,gs101-mipi-dcphy-rx",
+				     "google,gs201-mipi-dcphy-rx";
+			reg = <0x1a4f0000 0x4000>;
+			#phy-cells = <1>;
+			power-domains = <&pd_csis>;
+			samsung,pmu-syscon = <&pmu_system_controller 0x3ebc>;
+			google,reset-sysreg = <&sysreg_csis 0x500>;
+			status = "disabled";
+		};
+
 		cmu_dpu: clock-controller@1c000000 {
 			compatible = "google,gs101-cmu-dpu";
 			reg = <0x1c000000 0x10000>;

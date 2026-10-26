@@ -449,6 +449,20 @@
 	clock-frequency = <400000>;
 
 	/*
+	 * The main camera's focus actuator, an AKM AK7377 driven as an AK7375
+	 * (the same position and control registers). It answers with LDO1
+	 * and LDO3 on and NACKs with LDO1 alone or with LDO2. Disabled until
+	 * it is linked to the sensor with lens-focus.
+	 */
+	main_vcm: lens@c {
+		compatible = "asahi-kasei,ak7375";
+		reg = <0x0c>;
+		vdd-supply = <&cam_ldo3>;
+		vio-supply = <&cam_ldo1>;
+		status = "disabled";
+	};
+
+	/*
 	 * The main camera, a Samsung S5KGN1. The board feeds the module LDO1
 	 * (3.05 V, the I/O rail of every camera part), LDO2 (3.05 V) and
 	 * LDO3 (2.85 V); the module makes its own rails, so the supply names

@@ -25,6 +25,12 @@ properties:
     description:
       GPIO for chip select
 
+  vdd-supply:
+    description:
+      The chip's own supply. It is switched on before chip select is raised,
+      and off after chip select is lowered, whenever none of the LDOs is
+      enabled.
+
   vin3-supply:
     description:
       Input supply for ldo3, required if regulator is enabled

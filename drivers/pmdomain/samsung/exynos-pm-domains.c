@@ -9,6 +9,7 @@
 // conjunction with runtime-pm. Support for both device-tree and non-device-tree
 // based power domain support is included.
 
+#include <linux/arm-smccc.h>
 #include <linux/io.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
@@ -33,6 +34,8 @@ struct exynos_pm_domain_config {
 	phys_addr_t pmu_base;
 	/* How long a domain may take to reach its new state; 0 means 1 ms */
 	unsigned int timeout_us;
+	/* Offset of the TZ save/restore register in the domain's DTZPC */
+	u32 smc_offset;
 };
 
 /*
@@ -45,7 +48,36 @@ struct exynos_pm_domain {
 	struct generic_pm_domain pd;
 	u32 local_pwr_cfg;
 	unsigned int timeout_us;
+	u32 smc_offset;
+	phys_addr_t ac_pa;
+	bool ac_saved;		/* a save from a powered domain succeeded */
 };
+
+#define EXYNOS_SMC_CMD_PREPARE_PD_ONOFF		0x82000410
+#define EXYNOS_GET_IN_PD_DOWN			0
+#define EXYNOS_WAKEUP_PD_DOWN			1
+#define EXYNOS_RUNTIME_PM_TZPC_GROUP		2
+
+/*
+ * A domain whose block is guarded by a DTZPC loses its TrustZone
+ * configuration when it powers off. EL3 saves it before a power-off and
+ * restores it after a power-on, when asked to.
+ */
+static int exynos_pd_access_controller_power(struct exynos_pm_domain *pd,
+					     bool power_on)
+{
+	struct arm_smccc_res res;
+
+	if (!pd->ac_pa || !pd->smc_offset)
+		return 0;
+
+	arm_smccc_smc(EXYNOS_SMC_CMD_PREPARE_PD_ONOFF,
+		      power_on ? EXYNOS_WAKEUP_PD_DOWN : EXYNOS_GET_IN_PD_DOWN,
+		      pd->ac_pa + pd->smc_offset,
+		      EXYNOS_RUNTIME_PM_TZPC_GROUP, 0, 0, 0, 0, &res);
+
+	return res.a0;
+}
 
 static u32 exynos_pd_read(struct exynos_pm_domain *pd, u32 reg)
 {
@@ -74,15 +106,39 @@ static int exynos_pd_power(struct generic_pm_domain *domain, bool power_on)
 
 	pd = container_of(domain, struct exynos_pm_domain, pd);
 
+	if (!power_on) {
+		ret = exynos_pd_access_controller_power(pd, power_on);
+		if (ret) {
+			pr_err("SMC for power domain %s disable failed: %d\n",
+			       domain->name, ret);
+			return ret;
+		}
+		pd->ac_saved = true;
+	} else if (pd->ac_pa && !pd->ac_saved) {
+		/*
+		 * Restoring without a save of the powered block leaves the
+		 * block's registers secure, and an access then hangs the SoC.
+		 */
+		pr_err("Power domain %s: no DTZPC save to restore, staying off\n",
+		       domain->name);
+		return -EIO;
+	}
+
 	pwr = power_on ? pd->local_pwr_cfg : 0;
 	exynos_pd_write(pd, 0x0, pwr);
 
 	ret = read_poll_timeout(exynos_pd_read, status,
 				(status & pd->local_pwr_cfg) == pwr, 100,
 				pd->timeout_us, false, pd, 0x4);
-	if (ret)
+	if (ret) {
 		pr_err("Power domain %s %s failed (status 0x%x)\n", domain->name,
 		       power_on ? "enable" : "disable", status);
+	} else if (power_on) {
+		ret = exynos_pd_access_controller_power(pd, power_on);
+		if (ret)
+			pr_err("SMC for power domain %s enable failed: %d\n",
+			       domain->name, ret);
+	}
 
 	return ret;
 }
@@ -113,6 +169,7 @@ static const struct exynos_pm_domain_config gs101_cfg = {
 	 * apart; allow about twice that.
 	 */
 	.timeout_us		= 10000,
+	.smc_offset		= 0x0204,
 };
 
 static const struct of_device_id exynos_pm_domain_of_match[] = {
@@ -137,6 +194,42 @@ static const char *exynos_get_domain_name(struct device *dev,
 	if (of_property_read_string(node, "label", &name) < 0)
 		name = kbasename(node->full_name);
 	return devm_kstrdup_const(dev, name, GFP_KERNEL);
+}
+
+static int exynos_pd_get_access_controller(struct device *dev,
+					   struct exynos_pm_domain *pd)
+{
+	struct device_node *ac_np;
+	struct resource ac_res;
+	int ret, err;
+
+	ac_np = of_parse_phandle(dev->of_node, "samsung,dtzpc", 0);
+	if (!ac_np)
+		return 0;
+
+	ret = of_address_to_resource(ac_np, 0, &ac_res);
+	of_node_put(ac_np);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to get access controller\n");
+
+	pd->ac_pa = ac_res.start;
+
+	/*
+	 * For some domains, TZ save/restore might not be implemented. If that
+	 * is the case, simply mark it as always on, as otherwise a power cycle
+	 * will lead to lost TZ configuration, making it impossible to access
+	 * registers from Linux afterwards.
+	 */
+	err = exynos_pd_access_controller_power(pd, false);
+	if (err == -ENOENT) {
+		pd->ac_pa = 0;
+		pd->pd.flags |= GENPD_FLAG_ALWAYS_ON;
+	} else if (!err) {
+		/* Only a save of a powered domain can be restored */
+		pd->ac_saved = exynos_pd_read(pd, 0x4) & pd->local_pwr_cfg;
+	}
+
+	return 0;
 }
 
 static int exynos_pd_probe(struct platform_device *pdev)
@@ -177,6 +270,11 @@ static int exynos_pd_probe(struct platform_device *pdev)
 	pd->pd.power_on = exynos_pd_power_on;
 	pd->local_pwr_cfg = pm_domain_cfg->local_pwr_cfg;
 	pd->timeout_us = pm_domain_cfg->timeout_us ?: 1000;
+	pd->smc_offset = pm_domain_cfg->smc_offset;
+
+	ret = exynos_pd_get_access_controller(dev, pd);
+	if (ret)
+		return ret;
 
 	/*
 	 * Some Samsung platforms with bootloaders turning on the splash-screen

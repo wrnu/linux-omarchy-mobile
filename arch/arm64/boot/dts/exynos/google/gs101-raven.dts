@@ -487,6 +487,18 @@
 			};
 		};
 	};
+
+	/*
+	 * The module's ST M24C64, on LDO1 alone (stock: 1 ms, read-only). It
+	 * holds the module's factory calibration, which nothing may change.
+	 */
+	eeprom@50 {
+		compatible = "st,24c64", "atmel,24c64";
+		reg = <0x50>;
+		vcc-supply = <&cam_ldo1>;
+		read-only;
+		status = "disabled";
+	};
 };
 
 &csis1 {

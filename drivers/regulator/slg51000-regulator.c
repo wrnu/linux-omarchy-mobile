@@ -13,6 +13,7 @@
 #include <linux/irq.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
@@ -23,6 +24,7 @@
 #define SLG51000_MAX_EVT_REGISTER       8
 #define SLG51000_LDOHP_LV_MIN           1200000
 #define SLG51000_LDOHP_HV_MIN           2400000
+#define SLG51000_AUTOSUSPEND_MS         1000
 
 enum slg51000_regulators {
 	SLG51000_REGULATOR_LDO1 = 0,
@@ -41,6 +43,9 @@ struct slg51000 {
 	struct regulator_desc *rdesc[SLG51000_MAX_REGULATORS];
 	struct regulator_dev *rdev[SLG51000_MAX_REGULATORS];
 	struct gpio_desc *cs_gpiod;
+	struct regulator *vdd;
+	bool ena_gpio_used;
+	bool rpm_held;
 	int chip_irq;
 };
 
@@ -176,11 +181,47 @@ static const struct regmap_config slg51000_regmap_config = {
 	.wr_table = &slg51000_writeable_table,
 	.rd_table = &slg51000_readable_table,
 	.volatile_table = &slg51000_volatile_table,
+	.cache_type = REGCACHE_MAPLE,
 };
 
+/*
+ * The chip is held powered while any of its LDOs is on. With all of them
+ * off, it goes back to reset (chip select low) and its supply is dropped;
+ * the register cache answers until the next enable powers it up again.
+ */
+static int slg51000_enable(struct regulator_dev *rdev)
+{
+	struct slg51000 *chip = rdev_get_drvdata(rdev);
+	int ret;
+
+	ret = pm_runtime_resume_and_get(chip->dev);
+	if (ret < 0)
+		return ret;
+
+	ret = regulator_enable_regmap(rdev);
+	if (ret < 0)
+		pm_runtime_put_autosuspend(chip->dev);
+
+	return ret;
+}
+
+static int slg51000_disable(struct regulator_dev *rdev)
+{
+	struct slg51000 *chip = rdev_get_drvdata(rdev);
+	int ret;
+
+	ret = regulator_disable_regmap(rdev);
+	if (ret < 0)
+		return ret;
+
+	pm_runtime_put_autosuspend(chip->dev);
+
+	return 0;
+}
+
 static const struct regulator_ops slg51000_regl_ops = {
-	.enable = regulator_enable_regmap,
-	.disable = regulator_disable_regmap,
+	.enable = slg51000_enable,
+	.disable = slg51000_disable,
 	.is_enabled = regulator_is_enabled_regmap,
 	.list_voltage = regulator_list_voltage_linear,
 	.map_voltage = regulator_map_voltage_linear,
@@ -189,8 +230,8 @@ static const struct regulator_ops slg51000_regl_ops = {
 };
 
 static const struct regulator_ops slg51000_switch_ops = {
-	.enable = regulator_enable_regmap,
-	.disable = regulator_disable_regmap,
+	.enable = slg51000_enable,
+	.disable = slg51000_disable,
 	.is_enabled = regulator_is_enabled_regmap,
 };
 
@@ -198,14 +239,18 @@ static int slg51000_of_parse_cb(struct device_node *np,
 				const struct regulator_desc *desc,
 				struct regulator_config *config)
 {
+	struct slg51000 *chip = config->driver_data;
 	struct gpio_desc *ena_gpiod;
 
 	ena_gpiod = fwnode_gpiod_get_index(of_fwnode_handle(np), "enable", 0,
 					   GPIOD_OUT_LOW |
 						GPIOD_FLAGS_BIT_NONEXCLUSIVE,
 					   "gpio-en-ldo");
-	if (!IS_ERR(ena_gpiod))
+	if (!IS_ERR(ena_gpiod)) {
 		config->ena_gpiod = ena_gpiod;
+		/* enabled by its GPIO, the LDO needs the chip kept powered */
+		chip->ena_gpio_used = true;
+	}
 
 	return 0;
 }
@@ -343,9 +388,8 @@ static int slg51000_regulator_init(struct slg51000 *chip)
 	return 0;
 }
 
-static irqreturn_t slg51000_irq_handler(int irq, void *data)
+static irqreturn_t slg51000_handle_events(struct slg51000 *chip)
 {
-	struct slg51000 *chip = data;
 	struct regmap *regmap = chip->regmap;
 	enum { R0 = 0, R1, R2, REG_MAX };
 	u8 evt[SLG51000_MAX_EVT_REGISTER][REG_MAX];
@@ -414,6 +458,21 @@ static irqreturn_t slg51000_irq_handler(int irq, void *data)
 	return handled;
 }
 
+static irqreturn_t slg51000_irq_handler(int irq, void *data)
+{
+	struct slg51000 *chip = data;
+	irqreturn_t handled;
+
+	/* in reset the chip raises no events */
+	if (pm_runtime_get_if_active(chip->dev) <= 0)
+		return IRQ_NONE;
+
+	handled = slg51000_handle_events(chip);
+	pm_runtime_put_autosuspend(chip->dev);
+
+	return handled;
+}
+
 static void slg51000_clear_fault_log(struct slg51000 *chip)
 {
 	unsigned int val = 0;
@@ -435,6 +494,88 @@ static void slg51000_clear_fault_log(struct slg51000 *chip)
 		dev_dbg(chip->dev, "Fault log: FLT_POR\n");
 }
 
+static int slg51000_power_on(struct slg51000 *chip)
+{
+	int ret;
+
+	if (chip->vdd) {
+		ret = regulator_enable(chip->vdd);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (chip->cs_gpiod) {
+		gpiod_set_value_cansleep(chip->cs_gpiod, 1);
+		/* the datasheet's turn-on time from chip select to ready */
+		usleep_range(10000, 11000);
+	}
+
+	return 0;
+}
+
+static void slg51000_power_off(struct slg51000 *chip)
+{
+	if (chip->cs_gpiod) {
+		gpiod_set_value_cansleep(chip->cs_gpiod, 0);
+		/* back in reset before its supply goes */
+		usleep_range(10000, 11000);
+	}
+
+	if (chip->vdd)
+		regulator_disable(chip->vdd);
+}
+
+static int slg51000_runtime_suspend(struct device *dev)
+{
+	struct slg51000 *chip = dev_get_drvdata(dev);
+
+	regcache_cache_only(chip->regmap, true);
+	regcache_mark_dirty(chip->regmap);
+	slg51000_power_off(chip);
+
+	return 0;
+}
+
+static int slg51000_runtime_resume(struct device *dev)
+{
+	struct slg51000 *chip = dev_get_drvdata(dev);
+	int ret;
+
+	ret = slg51000_power_on(chip);
+	if (ret < 0)
+		return ret;
+
+	regcache_cache_only(chip->regmap, false);
+	ret = regcache_sync(chip->regmap);
+	if (ret < 0) {
+		dev_err(dev, "Failed to restore registers: %d\n", ret);
+		regcache_cache_only(chip->regmap, true);
+		slg51000_power_off(chip);
+	}
+
+	return ret;
+}
+
+static DEFINE_RUNTIME_DEV_PM_OPS(slg51000_pm_ops, slg51000_runtime_suspend,
+				 slg51000_runtime_resume, NULL);
+
+static void slg51000_power_off_action(void *data)
+{
+	struct slg51000 *chip = data;
+
+	/* runtime PM is disabled by now; power down if it left the chip on */
+	if (!pm_runtime_status_suspended(chip->dev))
+		slg51000_power_off(chip);
+}
+
+static void slg51000_rpm_release(void *data)
+{
+	struct slg51000 *chip = data;
+
+	if (chip->rpm_held)
+		pm_runtime_put_noidle(chip->dev);
+}
+
 static int slg51000_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -446,11 +587,30 @@ static int slg51000_i2c_probe(struct i2c_client *client)
 	if (!chip)
 		return -ENOMEM;
 
+	chip->vdd = devm_regulator_get_optional(dev, "vdd");
+	if (IS_ERR(chip->vdd)) {
+		if (PTR_ERR(chip->vdd) != -ENODEV)
+			return dev_err_probe(dev, PTR_ERR(chip->vdd),
+					     "Failed to get vdd supply\n");
+		chip->vdd = NULL;
+	}
+
+	/* the supply comes up before chip select */
+	if (chip->vdd) {
+		ret = regulator_enable(chip->vdd);
+		if (ret < 0)
+			return dev_err_probe(dev, ret,
+					     "Failed to enable vdd supply\n");
+	}
+
 	cs_gpiod = devm_gpiod_get_optional(dev, "dlg,cs",
 					   GPIOD_OUT_HIGH |
 						GPIOD_FLAGS_BIT_NONEXCLUSIVE);
-	if (IS_ERR(cs_gpiod))
+	if (IS_ERR(cs_gpiod)) {
+		if (chip->vdd)
+			regulator_disable(chip->vdd);
 		return PTR_ERR(cs_gpiod);
+	}
 
 	if (cs_gpiod) {
 		dev_info(dev, "Found chip selector property\n");
@@ -458,6 +618,10 @@ static int slg51000_i2c_probe(struct i2c_client *client)
 	}
 
 	usleep_range(10000, 11000);
+
+	ret = devm_add_action_or_reset(dev, slg51000_power_off_action, chip);
+	if (ret < 0)
+		return ret;
 
 	i2c_set_clientdata(client, chip);
 	chip->chip_irq = client->irq;
@@ -469,6 +633,20 @@ static int slg51000_i2c_probe(struct i2c_client *client)
 			error);
 		return error;
 	}
+
+	/* powered for the probe; it may power down once no LDO is on */
+	pm_runtime_set_active(dev);
+	pm_runtime_set_autosuspend_delay(dev, SLG51000_AUTOSUSPEND_MS);
+	pm_runtime_use_autosuspend(dev);
+	ret = devm_pm_runtime_enable(dev);
+	if (ret < 0)
+		return ret;
+
+	pm_runtime_get_noresume(dev);
+	chip->rpm_held = true;
+	ret = devm_add_action_or_reset(dev, slg51000_rpm_release, chip);
+	if (ret < 0)
+		return ret;
 
 	ret = slg51000_regulator_init(chip);
 	if (ret < 0) {
@@ -493,6 +671,15 @@ static int slg51000_i2c_probe(struct i2c_client *client)
 		dev_info(dev, "No IRQ configured\n");
 	}
 
+	/*
+	 * Only a chip that can be put back in reset powers down; one with an
+	 * LDO on its own enable GPIO keeps the reference taken above.
+	 */
+	if ((chip->cs_gpiod || chip->vdd) && !chip->ena_gpio_used) {
+		chip->rpm_held = false;
+		pm_runtime_put_autosuspend(dev);
+	}
+
 	return ret;
 }
 
@@ -506,6 +693,7 @@ static struct i2c_driver slg51000_regulator_driver = {
 	.driver = {
 		.name = "slg51000-regulator",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+		.pm = pm_ptr(&slg51000_pm_ops),
 	},
 	.probe = slg51000_i2c_probe,
 	.id_table = slg51000_i2c_id,

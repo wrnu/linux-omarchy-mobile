@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/pm_domain.h>
 #include <linux/delay.h>
+#include <linux/iopoll.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/pm_runtime.h>
@@ -30,6 +31,8 @@ struct exynos_pm_domain_config {
 	 * its address minus this PMU base.
 	 */
 	phys_addr_t pmu_base;
+	/* How long a domain may take to reach its new state; 0 means 1 ms */
+	unsigned int timeout_us;
 };
 
 /*
@@ -41,6 +44,7 @@ struct exynos_pm_domain {
 	u32 offset;
 	struct generic_pm_domain pd;
 	u32 local_pwr_cfg;
+	unsigned int timeout_us;
 };
 
 static u32 exynos_pd_read(struct exynos_pm_domain *pd, u32 reg)
@@ -65,29 +69,22 @@ static void exynos_pd_write(struct exynos_pm_domain *pd, u32 reg, u32 val)
 static int exynos_pd_power(struct generic_pm_domain *domain, bool power_on)
 {
 	struct exynos_pm_domain *pd;
-	u32 timeout, pwr;
-	char *op;
+	u32 pwr, status;
+	int ret;
 
 	pd = container_of(domain, struct exynos_pm_domain, pd);
 
 	pwr = power_on ? pd->local_pwr_cfg : 0;
 	exynos_pd_write(pd, 0x0, pwr);
 
-	/* Wait max 1ms */
-	timeout = 10;
+	ret = read_poll_timeout(exynos_pd_read, status,
+				(status & pd->local_pwr_cfg) == pwr, 100,
+				pd->timeout_us, false, pd, 0x4);
+	if (ret)
+		pr_err("Power domain %s %s failed (status 0x%x)\n", domain->name,
+		       power_on ? "enable" : "disable", status);
 
-	while ((exynos_pd_read(pd, 0x4) & pd->local_pwr_cfg) != pwr) {
-		if (!timeout) {
-			op = (power_on) ? "enable" : "disable";
-			pr_err("Power domain %s %s failed\n", domain->name, op);
-			return -ETIMEDOUT;
-		}
-		timeout--;
-		cpu_relax();
-		usleep_range(80, 100);
-	}
-
-	return 0;
+	return ret;
 }
 
 static int exynos_pd_power_on(struct generic_pm_domain *domain)
@@ -111,6 +108,11 @@ static const struct exynos_pm_domain_config exynos5433_cfg = {
 static const struct exynos_pm_domain_config gs101_cfg = {
 	.local_pwr_cfg		= 0x1,
 	.pmu_base		= 0x17460000,
+	/*
+	 * Google's CAL polls these domains' status up to 5000 times, 1 us
+	 * apart; allow about twice that.
+	 */
+	.timeout_us		= 10000,
 };
 
 static const struct of_device_id exynos_pm_domain_of_match[] = {
@@ -174,6 +176,7 @@ static int exynos_pd_probe(struct platform_device *pdev)
 	pd->pd.power_off = exynos_pd_power_off;
 	pd->pd.power_on = exynos_pd_power_on;
 	pd->local_pwr_cfg = pm_domain_cfg->local_pwr_cfg;
+	pd->timeout_us = pm_domain_cfg->timeout_us ?: 1000;
 
 	/*
 	 * Some Samsung platforms with bootloaders turning on the splash-screen
